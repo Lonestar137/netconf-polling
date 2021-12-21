@@ -1,11 +1,12 @@
 from decouple import config
 from ncclient import manager
-import pdb
+import xml.etree.ElementTree as ET
+import scheduling
 
 
 USER=config('NET_USER')
 PASS=config('PASS')
-HOST=config('TEST_HOST')
+HOST=config('TEST_HOST2')
 
 
 eos = manager.connect(host=HOST, port='830', 
@@ -22,6 +23,12 @@ cell = '''
 
 output=eos.get(filter=("subtree", cell))
 print(output)
+
+root = ET.fromstring(str(output))
+
+
+#Define variables to retrieve here:
+for i in root[0][0][0].getchildren(): print(str(i.tag.split('}')[1] + ':  '+ i.text)+'\n')
 
 
 
