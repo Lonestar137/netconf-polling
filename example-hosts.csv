@@ -1,0 +1,9 @@
+10.109.125.209,20,cell-radio,native-username
+10.109.125.209,20,cell-radio
+
+The above lines shows a poll to 10.109.125.209 every 20 seconds using the cell-radio
+template in templates.  You can call more than one template like in the first line 
+which uses the native-username template as well.
+
+IP,             freq,template_name
+10.109.125.225, 20,  1
