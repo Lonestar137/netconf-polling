@@ -10,7 +10,15 @@ import schedule, csv, time, os, datetime
 import psycopg2
 
 def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, db_connection: object):
-    TIMESTAMP=str(datetime.datetime.now())
+    #TIMESTAMP=str(datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S'))
+    
+    #There was a timezone issue with the EPOCH time being returned being different than the
+    #converted timezone to UTC.  It was 6 hours behind.  
+    #Note this may be different depending on your timezone you can change the hours= below to match the offset
+    #in your rendered grafana data..
+    fix_offset=datetime.timedelta(hours=6)
+    TIMESTAMP=str(datetime.datetime.now()+fix_offset)
+    print(TIMESTAMP)
     index=0
 
     try:
@@ -29,7 +37,14 @@ def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, d
             root = ET.fromstring(str(output))
 
             print(HOST)
-            columns="( timestamp DATE, "
+
+            #Generate sql cmd parameters
+            columns="( timestamp TIMESTAMP, IP varchar(255), "
+            columns_to_update="(timestamp, IP, "
+
+            #Start of update query, finished in update_db function.
+            update_values="'"+HOST+"', "
+
             #Define variables to retrieve here:
             #TODO Make this algorithm recursive so that it walks subtree better.
             for i in list(root[0][0][0]): 
@@ -40,48 +55,64 @@ def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, d
                 output=tag+':  '+text
                 print('\t'+output)
 
-                columns+=column_type_cast(tag, text)
+                #For table creation
+                formated_tag, formated_text=column_type_cast(tag, text)
+                columns+=formated_tag
+
+                #For update
+                columns_to_update+=tag+", "
+                update_values+=formated_text+", "
+            
             print('\n')
 
+            #Remove trailing ,
             columns=columns[:len(columns)-2]+");"
+            #columns+="PRIMARY KEY (timestamp));"
+
+            columns_to_update=columns_to_update[:len(columns_to_update)-2]+")"
+            update_values=update_values[:len(update_values)-2]+");"
 
             #Curr rpc call template name
             template_name=template_file_names[index]
             create_tables_database(db_connection, template_name, columns)
             index+=1
+
+            update_database(db_connection, template_name, TIMESTAMP, columns_to_update, update_values)
         eos.close_session()
 
     except Exception as e:
         print(str(e)+' for host: '+HOST)
         return 0
 
-    update_database(db_connection)
 
 
 def column_type_cast(column, value)->str:
     #Replace unsupported chars for table names
+   # column=column.replace('-', '_')
+   # value=value.replace('-', '_')
+   # column=column.replace('/', '_')
+   # value=value.replace('/', '_')
+   # column=column.replace('\\', '_')
+   # value=value.replace('\\', '_')
+    value=remove_unsupported_chars(value)
+    column=remove_unsupported_chars(column)
     column=column.replace('-', '_')
-    value=value.replace('-', '_')
-    column=column.replace('/', '_')
-    value=value.replace('/', '_')
-    column=column.replace('\\', '_')
-    value=value.replace('\\', '_')
 
     #Takes a string and assigns the required column type to it.
     try:
         #if field value is type int then make the column type int
         int(value)
-        return column+" INT, "
+        return column+" INT, ", value
     except:
         pass
     try:
         float(value)
-        return column+" FLOAT, "
+        return column+" FLOAT, ", value
     except:
         pass
 
-    #If nothing else make it a VARCHAR.
-    return column+" VARCHAR(255), "
+    #If nothing else make it a VARCHAR, and format the value for VARCHAR
+    return column+" VARCHAR(255), ", "'"+value+"'"
         
     
 
@@ -100,12 +131,28 @@ def create_tables_database(db_conn, template_name, table_columns):
     sql_cmd=("""CREATE TABLE if not exists """+template_name+table_columns)
     cursor.execute(sql_cmd)
     db_conn.commit()
-    print(sql_cmd)
+    #print(sql_cmd)
 
-def update_database(db_conn):
+def update_database(db_conn, table_name, timestamp, columns, values):
+    #Replace unsupported chars for table names
+    columns=remove_unsupported_chars(columns)
+    columns=columns.replace('-', '_')
+
+    values=remove_unsupported_chars(values)
+
+    #Complete values query parameters.
+    values="( TIMESTAMP '"+timestamp+"', "+values
+
     cursor = db_conn.cursor()
-    cursor.execute("""SELECT * FROM cell_radio;""")
+    sql_update_cmd="INSERT INTO "+table_name+columns+" VALUES"+values
+    #print(sql_update_cmd)
+    cursor.execute(sql_update_cmd)
 
+def remove_unsupported_chars(string: str):
+    #string=string.replace('-', '_')
+    string=string.replace('/', '_')
+    string=string.replace('\\', '_')
+    return string
 
 
 def schedule_from_csv(db_conn, file, USER: str, PASS: str):
@@ -166,6 +213,8 @@ if __name__ == "__main__":
 
     #Connection to db
     connection = conn_database(db_user, db_pass, db_name, db_host)
+    
+    #TODO Schedule cleanup sql_query
 
     #Schedule polling
     scheduler(connection, 'hosts.csv', user, passw)
