@@ -10,6 +10,8 @@ import schedule, csv, time, os, datetime
 import psycopg2
 
 def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, db_connection: object):
+    debug=config('DEBUG')
+
     #TIMESTAMP=str(datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S'))
     
     #There was a timezone issue with the EPOCH time being returned being different than the
@@ -18,13 +20,15 @@ def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, d
     #in your rendered grafana data..
     fix_offset=datetime.timedelta(hours=6)
     TIMESTAMP=str(datetime.datetime.now()+fix_offset)
-    print(TIMESTAMP)
+    if debug == True:
+        print(TIMESTAMP)
     index=0
+
 
     try:
         #Connect to device
         eos = manager.connect(host=HOST, port='830', 
-                timeout=5, username=USER, password=PASS, hostkey_verify=False)
+                timeout=10, username=USER, password=PASS, hostkey_verify=False)
 
         #Sends rpc to host, supports multple rpcs with ,, as delimiter.
         for i in rpc.split(',,'):
@@ -36,7 +40,8 @@ def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, d
             output=eos.get(filter=("subtree", i))
             root = ET.fromstring(str(output))
 
-            print(HOST)
+            if debug == 'True':
+                print(HOST)
 
             #Generate sql cmd parameters
             columns="( timestamp TIMESTAMP, IP varchar(255), "
@@ -53,7 +58,8 @@ def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, d
                 text=str(i.text)
                 #TODO Update database
                 output=tag+':  '+text
-                print('\t'+output)
+                if debug == 'True':
+                    print('\t'+output)
 
                 #For table creation
                 formated_tag, formated_text=column_type_cast(tag, text)
@@ -63,7 +69,8 @@ def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, d
                 columns_to_update+=tag+", "
                 update_values+=formated_text+", "
             
-            print('\n')
+            if debug == 'True':
+                print('\n')
 
             #Remove trailing ,
             columns=columns[:len(columns)-2]+");"
@@ -81,19 +88,15 @@ def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, d
         eos.close_session()
 
     except Exception as e:
-        print(str(e)+' for host: '+HOST)
+        if debug == 'True':
+            print(str(e)+' for host: '+HOST)
+        #TODO Logging function here
         return 0
 
 
 
 def column_type_cast(column, value)->str:
     #Replace unsupported chars for table names
-   # column=column.replace('-', '_')
-   # value=value.replace('-', '_')
-   # column=column.replace('/', '_')
-   # value=value.replace('/', '_')
-   # column=column.replace('\\', '_')
-   # value=value.replace('\\', '_')
     value=remove_unsupported_chars(value)
     column=remove_unsupported_chars(column)
     column=column.replace('-', '_')
