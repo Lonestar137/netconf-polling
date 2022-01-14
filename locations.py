@@ -76,10 +76,14 @@ if __name__ == "__main__":
                 x=i[1]
                 y=i[2]
                 values=' '+address+', '+x+', '+y+')'#Becomes (TIMESTAMP time.now(), IP, x, y)
-                print(values)
-                update_database(connection, 'geolocations', str(datetime.datetime.now()),  columns_to_update, values)
-                connection.commit()
-                print('hello')
+                #print(values)
+                try: 
+                    update_database(connection, 'geolocations', str(datetime.datetime.now()),  columns_to_update, values)
+                    connection.commit()
+                except psycopg2.errors.UniqueViolation as e :
+                    pass
+                except psycopg2.errors.InFailedSqlTransaction as e:
+                    pass
 
         
 
