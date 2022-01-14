@@ -139,7 +139,7 @@ def create_tables_database(db_conn, template_name, table_columns):
     sql_cmd=("""CREATE TABLE if not exists """+template_name+table_columns)
     cursor.execute(sql_cmd)
     db_conn.commit()
-    print(sql_cmd)
+    #print(sql_cmd)
 
 def update_database(db_conn, table_name, timestamp, columns, values):
     #Replace unsupported chars for table names
