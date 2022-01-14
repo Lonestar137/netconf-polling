@@ -1,0 +1,10 @@
+[Unit]
+Decription=Service for starting the netconf polling .py files located at /home/prime/netconf-polling
+
+[Service]
+User=prime
+WorkingDirectory=/home/prime/netconf-polling/
+ExecStart=/bin/bash -c 'cd /home/prime/netconf-polling && python3 netc.py' 
+# && python3 locations.py 
+
+WantedBy=multi-user.target

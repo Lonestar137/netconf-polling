@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 import schedule, csv, time, os, datetime
 
 import psycopg2
+import logging
 
 def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, db_connection: object):
     debug=config('DEBUG')
@@ -20,6 +21,7 @@ def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, d
     #in your rendered grafana data..
     fix_offset=datetime.timedelta(hours=6)
     TIMESTAMP=str(datetime.datetime.now()+fix_offset)
+    #TODO LOGGING
     if debug == True:
         print(TIMESTAMP)
     index=0
@@ -32,11 +34,11 @@ def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, d
 
         #Sends rpc to host, supports multple rpcs with ,, as delimiter.
         for i in rpc.split(',,'):
-            #skip empty
+            #skip empty rpc
             if len(i) < 10:
                 continue
 
-            #Get xml root for parsing
+            #Get xml root for parsing, i.e (The returned output of the rpc call to device.)
             output=eos.get(filter=("subtree", i))
             root = ET.fromstring(str(output))
 
@@ -56,19 +58,22 @@ def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, d
                 #i.tag is field name, i.text is field value
                 tag=str(i.tag.split('}')[1])
                 text=str(i.text)
-                #TODO Update database
+                
+                #For logging purposes
+                #TODO LOGGING
                 output=tag+':  '+text
                 if debug == 'True':
                     print('\t'+output)
 
-                #For table creation
+                #For table creation, creates sql command, assigns sql column types
                 formated_tag, formated_text=column_type_cast(tag, text)
                 columns+=formated_tag
 
-                #For update
+                #For update sql command, i.e. INSERT INTO TABLE(columns_to_update) Values (update_values)
                 columns_to_update+=tag+", "
                 update_values+=formated_text+", "
             
+            #TODO LOGGING
             if debug == 'True':
                 print('\n')
 
@@ -88,9 +93,9 @@ def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, d
         eos.close_session()
 
     except Exception as e:
+        #TODO LOGGING
         if debug == 'True':
             print(str(e)+' for host: '+HOST)
-        #TODO Logging function here
         return 0
 
 
@@ -134,7 +139,7 @@ def create_tables_database(db_conn, template_name, table_columns):
     sql_cmd=("""CREATE TABLE if not exists """+template_name+table_columns)
     cursor.execute(sql_cmd)
     db_conn.commit()
-    #print(sql_cmd)
+    print(sql_cmd)
 
 def update_database(db_conn, table_name, timestamp, columns, values):
     #Replace unsupported chars for table names
@@ -142,7 +147,8 @@ def update_database(db_conn, table_name, timestamp, columns, values):
     columns=columns.replace('-', '_')
 
     values=remove_unsupported_chars(values)
-
+    
+    #TODO Replace with f string format
     #Complete values query parameters.
     values="( TIMESTAMP '"+timestamp+"', "+values
 
@@ -172,15 +178,18 @@ def schedule_from_csv(db_conn, file, USER: str, PASS: str):
             freq = int(row[1])
             for mib in row[2:]:
                 for template_name in template_files:
-                    #For matching template found schedule rpc call
+                    #For matching template found in templates dir schedule rpc call
                     if mib == template_name:
-                        with open('./templates/'+template_name, 'r') as f:#os.system('cat templates/'+template_name)
+                        with open('./templates/'+template_name, 'r') as f:
+                            #,, delimits rpc calls
                             template+=f.read()+',,\n'
-                        #used for database table creation, t
+
+                        #array used for database table creation, t
                         matched_templates.append(mib)
 
-                    #If Template still empty and list finished
+                    #If template var still empty and list finished, then the mib described in hosts.csv for that device cannot be found in templates dir
                     elif template=='' and template_name == template_files[len(template_files)-1]:
+                        #TODO f format string
                         print('No matching template for '+mib+' on host '+ host +'.')
                         pass
 
@@ -204,6 +213,8 @@ def scheduler(db_connection,csv_file, USER: str, PASS: str):
 
 if __name__ == "__main__":
     #Example usage of this file
+    #Setup logging
+    #logging.basicConfig(filename='./logs/poll.log', encoding='utf-8', level=logging.DEBUG)
 
     #User credentials for logging into polled devices.
     user=config('NET_USER')

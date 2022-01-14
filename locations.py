@@ -26,7 +26,7 @@ def parse_dict(dt: dict):
     return host_list
             
 if __name__ == "__main__":
-    #Retrieves GPS locations for devices from ICINGA
+    #Retrieves GPS locations for devices from ICINGA and puts them in their own table.
     #Not necessary for netc to work.
 
     from netc import conn_database, create_tables_database, update_database
