@@ -13,7 +13,8 @@ def server_request(user: str, password: str, server: str, payload: dict):
     return response.json()
 
 def parse_dict(dt: dict):
-    host_list=[]
+    host_list=[] 
+    temp=[] 
     for group_tuple in dt.items():
         for x in group_tuple[1]:
             address=x['joins']['host']['address']
@@ -22,14 +23,18 @@ def parse_dict(dt: dict):
                 loc_x, loc_y=geolocation.split(',')
             except:
                 pass
-            host_list.append((address, loc_x, loc_y))
+
+            if geolocation not in temp:
+                #Only add unique
+                temp.append(geolocation)
+                host_list.append((address, loc_x, loc_y))
     return host_list
             
 if __name__ == "__main__":
     #Retrieves GPS locations for devices from ICINGA and puts them in their own table.
     #Not necessary for netc to work.
 
-    from netc import conn_database, create_tables_database, update_database
+    from netc import conn_database, create_tables_database, update_database 
     from decouple import config
     import requests
     import schedule, time, datetime, psycopg2, csv
@@ -63,8 +68,17 @@ if __name__ == "__main__":
             host = row[0]
             for i in parsed:
                 address=i[0]
+                #Only allows Icinga hosts that are in hosts.csv
                 if address == host: 
-                    hosts_to_render.append(address)
+                #    hosts_to_render.append(address)
+                    print(address)
+
+                #Places all icinga hosts in table
+                #TODO I need to make this work without error so all hosts go into the table.  I did it before, probably dont need the for loop
+                hosts_to_render.append(address)
+    
+    #TODO For example, 
+                    
                     
     #Connect to database, create table geolocations if not exists, and plug in variables.
     with conn_database(db_user, db_pass, db_name, db_host) as connection:
@@ -75,14 +89,25 @@ if __name__ == "__main__":
                 address="\'"+i[0]+"\'"
                 x=i[1]
                 y=i[2]
+                #if no x or y coord set default
+                if x == '' or y == '':
+                    x='29.715321'
+                    y='-86.181314'
+
+
                 values=' '+address+', '+x+', '+y+')'#Becomes (TIMESTAMP time.now(), IP, x, y)
                 #print(values)
                 try: 
                     update_database(connection, 'geolocations', str(datetime.datetime.now()),  columns_to_update, values)
+
                     connection.commit()
                 except psycopg2.errors.UniqueViolation as e :
+                    update_database(connection, 'geolocations', str(datetime.datetime.now()),  columns_to_update, values)
+                    print(address)
                     pass
                 except psycopg2.errors.InFailedSqlTransaction as e:
+                    update_database(connection, 'geolocations', str(datetime.datetime.now()),  columns_to_update, values)
+                    print(address)
                     pass
 
         

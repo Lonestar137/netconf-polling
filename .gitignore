@@ -3,5 +3,6 @@ __*
 .env
 .*
 hosts.csv
+*.csv
 psql*
 

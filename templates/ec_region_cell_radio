@@ -1,0 +1,6 @@
+<cellwan-oper-data xmlns="http://cisco.com/ns/yang/Cisco-IOS-XE-cellwan-oper">
+  <cellwan-radio>
+    <cellular-interface>Cellular0/1/0</cellular-interface>
+    <radio-power-mode>radio-power-mode-online</radio-power-mode>
+  </cellwan-radio>
+</cellwan-oper-data>
