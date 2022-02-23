@@ -1,18 +1,15 @@
 from decouple import config
 from netc import scheduler, conn_database
 import threading
+import queue
 
 
 
-
-def nc_region():
-    pass
-
-
-def ec_region(csv_file):
+def job(csv_file):
     #Example usage of this file
     #Setup logging
     #logging.basicConfig(filename='./logs/poll.log', encoding='utf-8', level=logging.DEBUG)
+
 
     #User credentials for logging into polled devices.
     user=config('NET_USER')
@@ -26,18 +23,22 @@ def ec_region(csv_file):
     #Connection to db
     connection = conn_database(db_user, db_pass, db_name, db_host)
     
-    #TODO Schedule cleanup sql_query
+    #TODO Schedule cleanup sql_cmd, (Deletes old data)
+
 
     #Schedule polling
     scheduler(connection, csv_file, user, passw)
 
+
     connection.close()
 
-def hello(test):
-    print(test)
+try:
+    job('hosts.csv')
+except Exception as e:
+    print(e)
+    pass
 
 
-#nc_region()
-thread1 = threading.Thread(target=ec_region, args=("ec_region.csv",))
+#thread1 = threading.Thread(target=job, args=("hosts.csv",))
 
-thread1.start()
+#thread1.start()

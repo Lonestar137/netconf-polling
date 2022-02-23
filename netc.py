@@ -10,6 +10,11 @@ import schedule, csv, time, os, datetime
 import psycopg2
 import logging
 
+##
+import queue
+import threading
+
+jobqueue = queue.Queue()
 def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, db_connection: object):
     debug=config('DEBUG')
 
@@ -22,7 +27,7 @@ def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, d
     fix_offset=datetime.timedelta(hours=6)
     TIMESTAMP=str(datetime.datetime.now()+fix_offset)
     #TODO LOGGING
-    if debug == True:
+    if debug == 'True':
         print(TIMESTAMP)
     index=0
 
@@ -163,38 +168,82 @@ def remove_unsupported_chars(string: str):
     string=string.replace('\\', '_')
     return string
 
+##
+def worker_main():
+    #Scheduled job queue.  Worker_threads pick up tasks as they appear in the pool.
+    while True:
+        job_func = jobqueue.get()
+
+        USER = job_func[1]
+        PASS = job_func[2]
+        host = job_func[3]
+        template = job_func[4]
+        matched_templates = job_func[5]
+        db_conn = job_func[6]
+
+        job_func[0](USER, PASS, host, template, matched_templates, db_conn)
+        jobqueue.task_done()
 
 def schedule_from_csv(db_conn, file, USER: str, PASS: str):
     #Returns a str list of all FILES in the templates dir.  Dirs are ignored
     template_files = [f for f in listdir('./templates') if isfile(join('./templates', f))]
 
     matched_templates=[]
+
+    thread_enabled=config('THREADING', cast=bool)
+
+    if thread_enabled:
+        # Import jobqueue variable for multithreading
+        global jobqueue
     
-    with open(file) as inventory:
-        invcsv = csv.reader(inventory)
-        for row in invcsv:
-            template=''
-            host = row[0]
-            freq = int(row[1])
-            for mib in row[2:]:
-                for template_name in template_files:
-                    #For matching template found in templates dir schedule rpc call
-                    if mib == template_name:
-                        with open('./templates/'+template_name, 'r') as f:
-                            #,, delimits rpc calls
-                            template+=f.read()+',,\n'
+    try: 
+        with open(file) as inventory:
+            invcsv = csv.reader(inventory)
+            for row in invcsv:
+                if row == '':
+                    continue
+                template=''
+                host = row[0]
+                freq = int(row[1])
+                for mib in row[2:]:
+                    for template_name in template_files:
+                        #For matching template found in templates dir schedule rpc call
+                        if mib == template_name:
+                            with open('./templates/'+template_name, 'r') as f:
+                                #,, delimits rpc calls
+                                template+=f.read()+',,\n'
 
-                        #array used for database table creation, t
-                        matched_templates.append(mib)
+                            #array used for database table creation, t
+                            matched_templates.append(mib)
 
-                    #If template var still empty and list finished, then the mib described in hosts.csv for that device cannot be found in templates dir
-                    elif template=='' and template_name == template_files[len(template_files)-1]:
-                        #TODO f format string
-                        print('No matching template for '+mib+' on host '+ host +'.')
-                        pass
+                        #If template var still empty and list finished, then the mib described in hosts.csv for that device cannot be found in templates dir
+                        elif template=='' and template_name == template_files[len(template_files)-1]:
+                            #TODO f format string
+                            print('No matching template for '+mib+' on host '+ host +'.')
+                            pass
 
-            if template != '':
-                schedule.every(freq).seconds.do(poll, USER, PASS, host, template, matched_templates, db_conn)
+                if template != '':
+                    if thread_enabled:
+                        # Places tasks in a queue, from there worker
+                        schedule.every(freq).seconds.do(jobqueue.put, (poll, USER, PASS, host, template, matched_templates, db_conn))
+                    else:
+                        schedule.every(freq).seconds.do(poll, USER, PASS, host, template, matched_templates, db_conn)
+    except IndexError as e:
+        print(e)
+        print('Problem occured at/after ', host, ' in hosts.csv.')
+        exit()
+
+    if thread_enabled:
+        # 3 threads are working to clear scheduled task queue.  You can add more here:
+        worker_thread = threading.Thread(target=worker_main)
+        worker_thread.start()
+
+        worker_thread2 = threading.Thread(target=worker_main)
+        worker_thread2.start()
+
+        worker_thread3 = threading.Thread(target=worker_main)
+        worker_thread3.start()
+
 
 def scheduler(db_connection,csv_file, USER: str, PASS: str):
 
