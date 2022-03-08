@@ -5,289 +5,308 @@ from os import listdir
 from os.path import isfile, join
 
 import xml.etree.ElementTree as ET
-import schedule, csv, time, os, datetime
+import xmltodict, pprint
+import schedule, csv, time, datetime
+import json
 
 import psycopg2
 import logging
 
-##
 import queue
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
-jobqueue = queue.Queue()
-def poll(USER: str, PASS: str, HOST: str, rpc: str, template_file_names: list, db_connection: object):
-    debug=config('DEBUG')
-
-    #TIMESTAMP=str(datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S'))
-    
-    #There was a timezone issue with the EPOCH time being returned being different than the
-    #converted timezone to UTC.  It was 6 hours behind.  
-    #Note this may be different depending on your timezone you can change the hours= below to match the offset
-    #in your rendered grafana data..
-    fix_offset=datetime.timedelta(hours=6)
-    TIMESTAMP=str(datetime.datetime.now()+fix_offset)
-    #TODO LOGGING
-    if debug == 'True':
-        print(TIMESTAMP)
-    index=0
+#Abstracts away the type of poll protocol used
+class protocolProcessor:
+    def __init__(self, hosts: dict):
+        self.__hosts = hosts
 
 
-    try:
-        #Connect to device
-        eos = manager.connect(host=HOST, port='830', 
-                timeout=10, username=USER, password=PASS, hostkey_verify=False)
+        # Dictionary for storing associated protocol hosts , poll frequency, and template file names
+        self.SNMPHosts = {}
+        self.netconfHosts = {}
 
-        #Sends rpc to host, supports multple rpcs with ,, as delimiter.
-        for i in rpc.split(',,'):
-            #skip empty rpc
-            if len(i) < 10:
-                continue
+    def getTemplateType(self):
+        #TODO Clean up this function
 
-            #Get xml root for parsing, i.e (The returned output of the rpc call to device.)
-            output=eos.get(filter=("subtree", i))
-            root = ET.fromstring(str(output))
+        i = 0
+        #Export json
+        for host, v in self.__hosts.items():
+            for template in v['templates']:
+                poll_info = {
+                         i: { 
+                            'host': host,
+                            'template': template,
+                            'frequency': v['frequency']
+                  }
+                }
 
-            if debug == 'True':
-                print(HOST)
+                if '.netconf' == template[-8:]:
+                    #print(template, 'is netconf')
+                    self.useNetconf(poll_info)
+                elif '.snmp' == template[-5:]:
+                    #print(template, 'is snmp')
+                    self.useSNMP(poll_info)
+                else:
+                    print('Invalid template name found: '+ template +'.  Please create or rename your template files, e.g. template.netconf or template.snmp')
+                    print('Also, make sure that templates are named correctly in your hosts file.')
+                    exit()
+                i+=1
+        return 1
 
-            #Generate sql cmd parameters
-            columns="( timestamp TIMESTAMP, IP varchar(255), "
-            columns_to_update="(timestamp, IP, "
+    def useNetconf(self, info: dict)->dict:
+        self.netconfHosts.update(info) 
 
-            #Start of update query, finished in update_db function.
-            update_values="'"+HOST+"', "
-
-            #Define variables to retrieve here:
-            #TODO Make this algorithm recursive so that it walks subtree better.
-            for i in list(root[0][0][0]): 
-                #i.tag is field name, i.text is field value
-                tag=str(i.tag.split('}')[1])
-                text=str(i.text)
-                
-                #For logging purposes
-                #TODO LOGGING
-                output=tag+':  '+text
-                if debug == 'True':
-                    print('\t'+output)
-
-                #For table creation, creates sql command, assigns sql column types
-                formated_tag, formated_text=column_type_cast(tag, text)
-                columns+=formated_tag
-
-                #For update sql command, i.e. INSERT INTO TABLE(columns_to_update) Values (update_values)
-                columns_to_update+=tag+", "
-                update_values+=formated_text+", "
-            
-            #TODO LOGGING
-            if debug == 'True':
-                print('\n')
-
-            #Remove trailing ,
-            columns=columns[:len(columns)-2]+");"
-            #columns+="PRIMARY KEY (timestamp));"
-
-            columns_to_update=columns_to_update[:len(columns_to_update)-2]+")"
-            update_values=update_values[:len(update_values)-2]+");"
-
-            #Curr rpc call template name
-            template_name=template_file_names[index]
-            create_tables_database(db_connection, template_name, columns)
-            index+=1
-
-            update_database(db_connection, template_name, TIMESTAMP, columns_to_update, update_values)
-        eos.close_session()
-
-    except Exception as e:
-        #TODO LOGGING
-        if debug == 'True':
-            print(str(e)+' for host: '+HOST)
-        return 0
-
-
-
-def column_type_cast(column, value)->str:
-    #Replace unsupported chars for table names
-    value=remove_unsupported_chars(value)
-    column=remove_unsupported_chars(column)
-    column=column.replace('-', '_')
-
-    #Takes a string and assigns the required column type to it.
-    try:
-        #if field value is type int then make the column type int
-        int(value)
-        return column+" INT, ", value
-    except:
-        pass
-    try:
-        float(value)
-        return column+" FLOAT, ", value
-    except:
-        pass
-
-    #If nothing else make it a VARCHAR, and format the value for VARCHAR
-    return column+" VARCHAR(255), ", "'"+value+"'"
+        return self.netconfHosts
         
     
+    def useSNMP(self, info)->dict:
+        self.SNMPHosts.update(info) 
+
+        return self.SNMPHosts
+
+    def start_protocol(self):
+
+        if self.SNMPHosts != {}:
+            print(self.SNMPHosts)
+            self.SNMP = snmp(self.SNMPHosts)
+            self.SNMP.schedulePoll()
+
+        if self.netconfHosts != {}:
+            self.NETCONF = netconf(self.netconfHosts)
+            self.NETCONF.schedulePoll()
+                
+        # if whatever other protocols you want to implement. Just create the class and call it here.
+
+        print('Starting jobs')
+        #Start all scheduled jobs.
+        while True:
+            schedule.run_pending()
 
 
-def conn_database(db_USER: str, db_PASS: str, DB: str, location: str = 'localhost')->object:
-    #Connection to psql database opened
-    db = "dbname="+DB+" user="+db_USER+" host="+location+" password="+db_PASS
 
-    conn = psycopg2.connect(db)
-    return conn
 
-def create_tables_database(db_conn, template_name, table_columns):
-    #Reads templates dir template names and creates a table in db with same name.
+#Basic functions shared for all protocols.
+class protocolBase:
+    executor = ThreadPoolExecutor(3)
+    future = ''
 
-    cursor = db_conn.cursor()
-    sql_cmd=("""CREATE TABLE if not exists """+template_name+table_columns)
-    cursor.execute(sql_cmd)
-    db_conn.commit()
-    #print(sql_cmd)
+    def getTemplateRPC(self, host, template):
+        # Returns True if the template is found in the directory.
 
-def update_database(db_conn, table_name, timestamp, columns, values):
-    #Replace unsupported chars for table names
-    columns=remove_unsupported_chars(columns)
-    columns=columns.replace('-', '_')
+        try:
+            #Get list of filenames in /templates
+            template_files = [f for f in listdir('./templates') if isfile(join('./templates', f))]
+        except FileNotFoundError:
+            print('Cannot find templates dir.  Make sure it exists in the main project directory.')
+            exit()
 
-    values=remove_unsupported_chars(values)
+        if template_files == []:
+            print('templates/ is empty.')
+            exit()
+
+        if template in template_files:
+            with open('./templates/'+template, 'r') as f:
+                rpc=f.read()
+                assert '' != rpc, print('RPC call string is empty. Check your '+template+' file and make sure it is not empty.')
+            return rpc
+        else:
+            print('No matching template found for '+ template + '.')
+            return ''
+
+    def run_scheduled(self):
+        # Class method for starting scheduled jobs.
+        while True:
+            schedule.run_pending()
+
+
+
+#Netconf polling code
+class netconf(protocolBase):
+    def __init__(self, host_dict: dict):
+        self.hosts_to_poll = host_dict
+        assert dict == type(self.hosts_to_poll), print('Netconf class only takes type dict.')
+        assert {} != self.hosts_to_poll, print('Empty dictionary passed to netconf class.')
+
+        self.__USER = config('USER')
+        self.__PASS = config('PASS')
+        #ex: 
+        """
+        {
+           1: {
+            "host": "10.100.1.1", 
+                "frequency": 10,
+                "template": ""
+            }
+        }
+
+        """
+    def poll(self, host, rpc):
+        try:
+            #Connect to device
+            eos = manager.connect(host=host, port='830', 
+                    timeout=10, username=self.__USER, password=self.__PASS, hostkey_verify=False)
+
+            #Get xml root for parsing, i.e (The returned output of the rpc call to device.)
+            output=eos.get(filter=("subtree", rpc))
+            #root = ET.fromstring(str(output))
+            print('-====Connected to '+host+'====-')
+
+            #TODO Send dict to databaseHandler.
+            rpc_dict = xmltodict.parse(str(output))
+
+            #TODO comment out these two lines. Only useful for logging.
+            pprint.pprint(rpc_dict['rpc-reply']['@xmlns'], indent=1) # Shows netconf version, not necess
+            pprint.pprint(rpc_dict['rpc-reply']['data'], indent=1)
+
+            eos.close_session()
+
+        except Exception as e:
+            #TODO LOGGING
+            print(str(e)+' for host: '+host)
+            return 0
+
+
+    def schedulePoll(self):
+
+        for index, v in self.hosts_to_poll.items():
+            rpc = self.getTemplateRPC(v['host'], v['template'])
+            if rpc != '':
+                # jobqueue put here
+                #schedule.every(v['frequency']).seconds.do(self.poll, v['host'], rpc) #Non async call
+                schedule.every(v['frequency']).seconds.do(self.executor.submit, self.poll, v['host'], rpc) #async call
+
+        print('Netconf polls scheduled.')
+
+
+
+
+class snmp(protocolBase):
+    #TODO Add snmp specific polling functions here.
+
+    def __init__(self, host_dict):
+        self.hosts_to_poll = host_dict
+
+        assert dict == type(self.hosts_to_poll), print('SNMP class only takes type dict.')
+        assert {} != self.hosts_to_poll, print('Empty dictionary passed to snmp class.')
+
+    def poll(self, host, rpc):
+        pass
+
+    def schedulePoll(self):
+        for index, v in self.hosts_to_poll.items():
+            rpc = self.getTemplateRPC(v['host'], v['template'])
+            if rpc != '':
+                pass
+                #TODO Schedule SNMP call here.
+                #schedule.every(v['frequency']).seconds.do(self.poll, v['host'], rpc)
+                #schedule.every(v['frequency']).seconds.do(self.executor.submit, self.poll, v['host'], rpc) #async call 
+
+
+        print('SNMP polls scheduled.')
+
+
+class databaseHandler:
+    def __init__(self, data):
+        self.DBUSER = config('DB_USER')
+        self.DBPASS = config('DB_PASS')
+
+        self.data = data
+
+    def generateTable(self):
+        pass
+
+
+# Abstracts away the type of file host information is pulled from, I.e. application determines how to handle the file given same information. File extension is the determiner
+class fileProcessor:
+
+    def __init__(self, f=None):
+        self.__f = f    # File w/path
+        self.__hosts={} # Dict to run poll on
+
+    def findFileType(self)->str:
+        self.ftype=''
+
+        #Determines what kind of file the user is using, returns filetype.
+        if self.__f[-4:] == '.csv':
+            self.ftype='csv'
+        elif self.__f[-5:] == '.json':
+            self.ftype='json'
+        elif self.__f[-5:] == '.yaml':
+            self.ftype='yaml'
+
+        return self.ftype
     
-    #TODO Replace with f string format
-    #Complete values query parameters.
-    values="( TIMESTAMP '"+timestamp+"', "+values
+    def readCSV(self)->dict:
+        templatesToRun=[]
+        try: 
+            with open(self.__f) as inventory:
+                invcsv = csv.reader(inventory)
+                for row in invcsv:
+                    if row == '':
+                        continue
+                    host = row[0]
+                    freq = int(row[1])
+                    templatesToRun = row[2:]
+                    
+                    hostDefinition = {
+                            host:{
+                            "frequency": freq,
+                            "templates": templatesToRun
+                            }
+                    }
+                    self.__hosts.update(hostDefinition)
+        except IndexError as e:
+            print(e)
+            print('Problem occured at/after ', host, ' in hosts.csv.')
 
-    cursor = db_conn.cursor()
-    sql_update_cmd="INSERT INTO "+table_name+columns+" VALUES"+values
-    #print(sql_update_cmd)
-    cursor.execute(sql_update_cmd)
+        
+        #TODO Move this assertion to wherever this is called.
+        assert dict == type(self.__hosts), "Read CSV should return type dict."
+        # Return Dict
+        return self.__hosts
 
-def remove_unsupported_chars(string: str):
-    #string=string.replace('-', '_')
-    string=string.replace('/', '_')
-    string=string.replace('\\', '_')
-    return string
+    def readJSON(self):
 
-##
-def worker_main():
-    #Scheduled job queue.  Worker_threads pick up tasks as they appear in the pool.
-    while True:
-        job_func = jobqueue.get()
+        with open(self.__f) as f:
+            self.__hosts = json.loads(f.read())
 
-        USER = job_func[1]
-        PASS = job_func[2]
-        host = job_func[3]
-        template = job_func[4]
-        matched_templates = job_func[5]
-        db_conn = job_func[6]
+        #TODO Move this assertion to wherever this is called.
+        assert dict == type(self.__hosts), "self.__hosts should return type dict."
+        return self.__hosts
 
-        job_func[0](USER, PASS, host, template, matched_templates, db_conn)
-        jobqueue.task_done()
+    def readYAML(self):
+        pass
 
-def schedule_from_csv(db_conn, file, USER: str, PASS: str):
-    #Returns a str list of all FILES in the templates dir.  Dirs are ignored
-    template_files = [f for f in listdir('./templates') if isfile(join('./templates', f))]
+        #TODO Move this assertion to wherever this is called.
+        assert dict == type(self.__hosts), "self.__hosts should return type dict."
+        return self.__hosts
 
-    matched_templates=[]
 
-    thread_enabled=config('THREADING', cast=bool)
+def start(f='hosts.csv'):
+    #Initialize instance
+    s = fileProcessor(f)
+    ftype = s.findFileType()
 
-    if thread_enabled:
-        # Import jobqueue variable for multithreading
-        global jobqueue
-    
-    try: 
-        with open(file) as inventory:
-            invcsv = csv.reader(inventory)
-            for row in invcsv:
-                if row == '':
-                    continue
-                template=''
-                host = row[0]
-                freq = int(row[1])
-                for mib in row[2:]:
-                    for template_name in template_files:
-                        #For matching template found in templates dir schedule rpc call
-                        if mib == template_name:
-                            with open('./templates/'+template_name, 'r') as f:
-                                #,, delimits rpc calls
-                                template+=f.read()+',,\n'
-
-                            #array used for database table creation, t
-                            matched_templates.append(mib)
-
-                        #If template var still empty and list finished, then the mib described in hosts.csv for that device cannot be found in templates dir
-                        elif template=='' and template_name == template_files[len(template_files)-1]:
-                            #TODO f format string
-                            print('No matching template for '+mib+' on host '+ host +'.')
-                            pass
-
-                if template != '':
-                    if thread_enabled:
-                        # Places tasks in a queue, from there worker
-                        schedule.every(freq).seconds.do(jobqueue.put, (poll, USER, PASS, host, template, matched_templates, db_conn))
-                    else:
-                        schedule.every(freq).seconds.do(poll, USER, PASS, host, template, matched_templates, db_conn)
-    except IndexError as e:
-        print(e)
-        print('Problem occured at/after ', host, ' in hosts.csv.')
+    #Get host data: dict
+    if ftype == 'csv':
+        hosts = s.readCSV()
+    elif ftype == 'json':
+        hosts = s.readJSON()
+    elif ftype == 'yaml':
+        hosts = s.readYAML()
+    else:
+        print('No matching file type.')
         exit()
+   
+    p = protocolProcessor(hosts)
+    p.getTemplateType()
+    p.start_protocol()
+    #p.startjobs()
 
-    if thread_enabled:
-        # 3 threads are working to clear scheduled task queue.  You can add more here:
-        worker_thread = threading.Thread(target=worker_main)
-        worker_thread.start()
-
-        worker_thread2 = threading.Thread(target=worker_main)
-        worker_thread2.start()
-
-        worker_thread3 = threading.Thread(target=worker_main)
-        worker_thread3.start()
-
-
-def scheduler(db_connection,csv_file, USER: str, PASS: str):
-
-    #Schedule data collection
-    schedule_from_csv(db_connection, csv_file, USER, PASS)
-
-    #Schedule database update
-    #TODO Run on separate Thread
-    #schedule.every(freq).seconds.do(db_update, host, mib)
-
-    #Run schedule
-    while True:
-        schedule.run_pending()
-
-
-
-if __name__ == "__main__":
-    #Example usage of this file
-    #Setup logging
-    #logging.basicConfig(filename='./logs/poll.log', encoding='utf-8', level=logging.DEBUG)
-
-    #User credentials for logging into polled devices.
-    user=config('NET_USER')
-    passw=config('PASS')
     
-    #DB credentials and db host location
-    db_name = 'grafana'
-    db_host = 'localhost'
-    db_user, db_pass = config('DB_USER'), config('DB_PASS')
-
-    #Connection to db
-    connection = conn_database(db_user, db_pass, db_name, db_host)
-    
-    #TODO Schedule cleanup sql_query
-
-    #Schedule polling
-    scheduler(connection, 'hosts.csv', user, passw)
-
-    connection.close()
 
 
-
-#TODO: schedule updates
-#TODO: Whenever new template is created; creates a new table with that template name and 
-#stores all the returned tags:values in teh table.
-
-
+if __name__ == ("__main__"):
+    #start('x.json')
+    start('hosts.csv')
