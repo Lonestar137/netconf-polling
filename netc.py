@@ -152,6 +152,13 @@ class netconf(protocolBase):
             #root = ET.fromstring(str(output))
             print('-====Connected to '+host+'====-')
 
+            def print_all_KVs(d: dict):
+                for k,v in d.items():
+                    if type(v) == dict:
+                        dfs(v)
+                    else:
+                        print(k,v)
+
             #TODO Send dict to databaseHandler.
             rpc_dict = xmltodict.parse(str(output))
 
@@ -159,12 +166,16 @@ class netconf(protocolBase):
             pprint.pprint(rpc_dict['rpc-reply']['@xmlns'], indent=1) # Shows netconf version, not necess
             pprint.pprint(rpc_dict['rpc-reply']['data'], indent=1)
 
+            # Recursively print out all the keys and values in the dictionary.
+            print_all_KVs(rpc_dict['rpc-reply']['data'])
+
             eos.close_session()
 
         except Exception as e:
             #TODO LOGGING
             print(str(e)+' for host: '+host)
             return 0
+
 
 
     def schedulePoll(self):
